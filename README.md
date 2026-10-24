@@ -60,7 +60,12 @@ authentication, so anyone who can reach it is root on the host. Run it again wit
 close the API. `agent-redeploy start` rebuilds every agent from its last staged build context (a
 fresh base image and full upgrade, with no new commit needed), and `agent-redeploy status` reports
 the result. The Proxmox janitor uses these for its weekly rebuild, through a key forced to
-`agent-redeploy-ssh`. The LXC deployment below (`deploy/provision.sh`) still works as
+`agent-redeploy-ssh`.
+
+Third-party apps go through the same path: put a Dockerfile in `deploy/apps/<app>/` and run
+`APP=<app> HOST=<docker host> PUBLISH=<host>:<container> deploy/deploy-app.sh`. Base it on the upstream image, add
+an `apt-get full-upgrade` layer keyed on `PATCHED_AT`, and declare the data directory as a `VOLUME`. The app is then
+built fully patched, kept in `<app>-data`, and rebuilt every week. `apps/uptime-kuma` is an example. The LXC deployment below (`deploy/provision.sh`) still works as
 an alternative.
 
 ### LXC deployment (alternative)

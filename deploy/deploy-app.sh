@@ -3,8 +3,10 @@
 # an agent: built fully patched (--pull, apt full-upgrade), rolled back if it doesn't stay up, and
 # rebuilt every week by agent-redeploy. Re-run it after changing the app's Dockerfile or env.
 #   APP=uptime-kuma HOST=192.0.2.21 PUBLISH=3001:3001 [PRIORITY=high] [ENV_FILE=app.env] \
-#     [ADMIN_KEY=~/.ssh/id_ed25519] deploy/deploy-app.sh
-# The app's data lives in the volume <app>-data (from the image's VOLUME).
+#     [EXTRA="network=kuma"] [ADMIN_KEY=~/.ssh/id_ed25519] deploy/deploy-app.sh
+# The app's data lives in the volume <app>-data (from the image's VOLUME). EXTRA holds root-only run
+# options, one per line (see agent-deploy): mount=/host:/container[:ro] and network=<name>; it's
+# written to /etc/agents/<app>.extra on the host, where staged files can't reach.
 set -euo pipefail
 : "${APP:?set APP=<directory under deploy/apps>}" "${HOST:?set HOST=<docker host address>}"
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -19,8 +21,9 @@ mkdir -p "$tmp/context"
 cp -r "$ctx/." "$tmp/context/"
 if [[ -n "${ENV_FILE:-}" ]]; then cp "$ENV_FILE" "$tmp/agent.env"; else : > "$tmp/agent.env"; fi
 rev=$(cat "$tmp/context/"* | sha1sum | cut -c1-40)  # the app's "revision" is its build context
-printf 'REVISION=%s\nPUBLISH=%s\nPRIORITY=%s-priority\n' "$rev" "${PUBLISH:-}" "${PRIORITY:-high}" > "$tmp/deploy.env"
+printf 'REVISION=%s\nPUBLISH=%s\nPRIORITY=%s-priority\nKIND=app\n' "$rev" "${PUBLISH:-}" "${PRIORITY:-high}" > "$tmp/deploy.env"
 
 ssh "${opts[@]}" "root@$HOST" "rm -rf /home/deploy/staging/$APP && install -d -m 755 -o deploy -g deploy /home/deploy/staging/$APP"
 tar -C "$tmp" -cf - . | ssh "${opts[@]}" "root@$HOST" "tar -C /home/deploy/staging/$APP -xf - && chown -R deploy:deploy /home/deploy/staging/$APP"
+printf '%s\n' "${EXTRA:-}" | ssh "${opts[@]}" "root@$HOST" "install -d -m 700 /etc/agents && umask 077 && cat > /etc/agents/$APP.extra"
 ssh "${opts[@]}" "root@$HOST" "/usr/local/sbin/agent-deploy $APP"

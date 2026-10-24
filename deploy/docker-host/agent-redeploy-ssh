@@ -1,8 +1,9 @@
 #!/bin/sh
 # Forced command for the janitor's key in deploy's authorized_keys (command="...",restrict): it may
-# start a rebuild of every agent or read the last one's status, and nothing else.
+# start a rebuild of every agent, read the last one's status, or list the containers, and nothing else.
 case "$SSH_ORIGINAL_COMMAND" in
   redeploy-start) exec sudo -n /usr/local/sbin/agent-redeploy start ;;
   redeploy-status) exec sudo -n /usr/local/sbin/agent-redeploy status ;;
+  containers) exec sudo -n /usr/local/sbin/agent-redeploy list ;;
   *) echo '{"error": "unknown request"}'; exit 1 ;;
 esac

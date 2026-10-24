@@ -2,7 +2,7 @@
 # Prepare a Docker VM (e.g. from the community-scripts Docker VM script) to receive agent
 # deploys, and let the given runners deploy to it. Re-runnable. Run from an admin workstation
 # with root SSH to the Proxmox nodes; the VM must accept the same admin key (cloud-init).
-#   VM=<node>:<vmid> RUNNERS="<node>:<runner ctid> ..." [ADMIN_KEY=~/.ssh/key] [DOCKER_API_ALLOW=<ip,...>] [TIMEZONE=<zone>] deploy/docker-host.sh
+#   VM=<node>:<vmid> RUNNERS="<node>:<runner ctid> ..." [ADMIN_KEY=~/.ssh/key] [DOCKER_API_ALLOW=<ip,...>] [PORT_ALLOW=<port=ip,...;...>] [TIMEZONE=<zone>] deploy/docker-host.sh
 # DOCKER_API_ALLOW opens the unauthenticated Docker API on tcp/2375 to those addresses only (e.g. a
 # Dockhand or Portainer host); leaving it unset removes it.
 # JANITOR_PUBKEY=<file> JANITOR_FROM=<ip[,cidr]> lets that key (the Proxmox janitor's) start a
@@ -58,7 +58,7 @@ fi
 echo "==> Bootstrapping VM $vmid ($ip)"
 vm_scp "$HERE/docker-host/agent-deploy" "$HERE/docker-host/agent-redeploy" "$HERE/docker-host/agent-redeploy-ssh" \
   "$HERE/docker-host/bootstrap-docker-host.sh" "$tmp/runner_keys" "root@$ip:/root/"
-vm_ssh "DOCKER_API_ALLOW='${DOCKER_API_ALLOW:-}' TIMEZONE='${TIMEZONE:-}' bash /root/bootstrap-docker-host.sh /root/agent-deploy /root/runner_keys && rm -f /root/agent-deploy /root/agent-redeploy /root/agent-redeploy-ssh /root/bootstrap-docker-host.sh /root/runner_keys"
+vm_ssh "DOCKER_API_ALLOW='${DOCKER_API_ALLOW:-}' PORT_ALLOW='${PORT_ALLOW:-}' TIMEZONE='${TIMEZONE:-}' bash /root/bootstrap-docker-host.sh /root/agent-deploy /root/runner_keys && rm -f /root/agent-deploy /root/agent-redeploy /root/agent-redeploy-ssh /root/bootstrap-docker-host.sh /root/runner_keys"
 
 echo "==> Pinning the VM's host key on the runners"
 for r in $RUNNERS; do

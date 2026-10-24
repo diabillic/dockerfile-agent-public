@@ -43,32 +43,53 @@ EOF
   systemctl restart docker
 fi
 
-# Optional: the Docker API on TCP 2375 for a remote manager such as Dockhand or Portainer, firewalled
-# to DOCKER_API_ALLOW (comma-separated IPv4 addresses or CIDRs). It has no authentication, so
-# whoever can reach it is root on this host. Unset removes it again.
+# Optional firewalling, in its own nftables table so Docker's rules and any other firewall are left alone:
+#   DOCKER_API_ALLOW="ip[,cidr]"            the Docker API on TCP 2375 for a remote manager such as Dockhand or
+#                                           Portainer, from those addresses only. It has no authentication, so
+#                                           whoever can reach it is root on this host.
+#   PORT_ALLOW="port=ip[,cidr][;port=...]"  a published container port (e.g. a read-only Docker socket proxy)
+#                                           reachable only from those addresses.
+# Unset removes them again. Docker restarts only when its own TCP listener changes.
 dropin=/etc/systemd/system/docker.service.d/tcp-api.conf
 fwunit=/etc/systemd/system/docker-api-firewall.service
-if [[ -n "${DOCKER_API_ALLOW:-}" ]]; then
-  [[ "$DOCKER_API_ALLOW" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}(/[0-9]{1,2})?(,[0-9]{1,3}(\.[0-9]{1,3}){3}(/[0-9]{1,2})?)*$ ]] \
+ips='[0-9]{1,3}(\.[0-9]{1,3}){3}(/[0-9]{1,2})?(,[0-9]{1,3}(\.[0-9]{1,3}){3}(/[0-9]{1,2})?)*'
+restart_docker=0
+if [[ -n "${DOCKER_API_ALLOW:-}" || -n "${PORT_ALLOW:-}" ]]; then
+  [[ -z "${DOCKER_API_ALLOW:-}" || "$DOCKER_API_ALLOW" =~ ^$ips$ ]] \
     || { echo "DOCKER_API_ALLOW must be IPv4 addresses or CIDRs, comma separated" >&2; exit 1; }
+  [[ -z "${PORT_ALLOW:-}" || "$PORT_ALLOW" =~ ^[0-9]{2,5}=$ips(\;[0-9]{2,5}=$ips)*$ ]] \
+    || { echo "PORT_ALLOW must be port=ip[,cidr] entries, separated by ;" >&2; exit 1; }
   apt-get install -y -qq nftables >/dev/null
   install -d /etc/homelab /etc/systemd/system/docker.service.d
-  # Its own table, so Docker's rules and any other firewall are left alone. The first two lines
-  # make reloading idempotent.
-  cat > /etc/homelab/docker-api.nft <<EOF
-table inet docker_api
-delete table inet docker_api
-table inet docker_api {
-  chain input {
-    type filter hook input priority -10; policy accept;
-    tcp dport 2375 ip saddr { ${DOCKER_API_ALLOW//,/, } } accept
-    tcp dport 2375 drop
-  }
-}
-EOF
+  {
+    echo "table inet docker_api"          # these two lines make reloading idempotent
+    echo "delete table inet docker_api"
+    echo "table inet docker_api {"
+    if [[ -n "${DOCKER_API_ALLOW:-}" ]]; then
+      echo "  chain input {"
+      echo "    type filter hook input priority -10; policy accept;"
+      echo "    tcp dport 2375 ip saddr { ${DOCKER_API_ALLOW//,/, } } accept"
+      echo "    tcp dport 2375 drop"
+      echo "  }"
+    fi
+    if [[ -n "${PORT_ALLOW:-}" ]]; then
+      # Published ports are DNATed to the container, so they're filtered on the forward path by
+      # their original destination port. Only new connections: replies come from the container.
+      echo "  chain forward {"
+      echo "    type filter hook forward priority -10; policy accept;"
+      IFS=';' read -r -a entries <<<"$PORT_ALLOW"
+      for e in "${entries[@]}"; do
+        port=${e%%=*}; from=${e#*=}
+        echo "    ct state new meta l4proto tcp ct original proto-dst $port ip saddr { ${from//,/, } } accept"
+        echo "    ct state new meta l4proto tcp ct original proto-dst $port drop"
+      done
+      echo "  }"
+    fi
+    echo "}"
+  } > /etc/homelab/docker-api.nft
   cat > "$fwunit" <<'EOF'
 [Unit]
-Description=Allow the Docker API (TCP 2375) only from the configured addresses
+Description=Allow the Docker API and listed published ports only from the configured addresses
 DefaultDependencies=no
 Before=docker.service network-pre.target
 Wants=network-pre.target
@@ -81,8 +102,12 @@ ExecStart=/usr/sbin/nft -f /etc/homelab/docker-api.nft
 [Install]
 WantedBy=multi-user.target
 EOF
-  # dockerd only listens on TCP once the firewall is in place.
-  cat > "$dropin" <<'EOF'
+  systemctl daemon-reload
+  systemctl enable docker-api-firewall.service >/dev/null 2>&1
+  systemctl restart docker-api-firewall.service
+  if [[ -n "${DOCKER_API_ALLOW:-}" ]]; then
+    # dockerd only listens on TCP once the firewall is in place.
+    new=$(cat <<'EOF'
 [Unit]
 Requires=docker-api-firewall.service
 After=docker-api-firewall.service
@@ -91,19 +116,29 @@ After=docker-api-firewall.service
 ExecStart=
 ExecStart=/usr/bin/dockerd -H fd:// -H tcp://0.0.0.0:2375 --tls=false --containerd=/run/containerd/containerd.sock
 EOF
-  systemctl daemon-reload
-  systemctl enable docker-api-firewall.service >/dev/null 2>&1
-  systemctl restart docker-api-firewall.service
-  systemctl restart docker
-  echo "Docker API on tcp/2375, allowed from: $DOCKER_API_ALLOW"
-elif [[ -f "$dropin" ]]; then
+)
+    if [[ "$(cat "$dropin" 2>/dev/null)" != "$new" ]]; then
+      printf '%s\n' "$new" > "$dropin"
+      restart_docker=1
+    fi
+    echo "Docker API on tcp/2375, allowed from: $DOCKER_API_ALLOW"
+  elif [[ -f "$dropin" ]]; then
+    rm -f "$dropin"
+    restart_docker=1
+    echo "Docker API on tcp/2375 removed"
+  fi
+  [[ -n "${PORT_ALLOW:-}" ]] && echo "Published ports firewalled: $PORT_ALLOW"
+elif [[ -f "$dropin" || -f "$fwunit" ]]; then
+  [[ -f "$dropin" ]] && restart_docker=1
   rm -f "$dropin"
   systemctl disable --now docker-api-firewall.service >/dev/null 2>&1 || true
   rm -f "$fwunit" /etc/homelab/docker-api.nft
   nft delete table inet docker_api 2>/dev/null || true
+  echo "Docker API and port firewall removed"
+fi
+if [[ $restart_docker == 1 ]]; then
   systemctl daemon-reload
   systemctl restart docker
-  echo "Docker API on tcp/2375 removed"
 fi
 
 id deploy >/dev/null 2>&1 || useradd --create-home --shell /bin/bash deploy
@@ -120,7 +155,7 @@ here=$(dirname "$DEPLOYER")
 install -m 750 -o root -g root "$DEPLOYER" /usr/local/sbin/agent-deploy
 install -m 750 -o root -g root "$here/agent-redeploy" /usr/local/sbin/agent-redeploy
 install -m 755 -o root -g root "$here/agent-redeploy-ssh" /usr/local/sbin/agent-redeploy-ssh
-echo 'deploy ALL=(root) NOPASSWD: /usr/local/sbin/agent-deploy, /usr/local/sbin/agent-redeploy start, /usr/local/sbin/agent-redeploy status' \
+echo 'deploy ALL=(root) NOPASSWD: /usr/local/sbin/agent-deploy, /usr/local/sbin/agent-redeploy start, /usr/local/sbin/agent-redeploy status, /usr/local/sbin/agent-redeploy list' \
   > /etc/sudoers.d/agent-deploy
 chmod 440 /etc/sudoers.d/agent-deploy
 visudo -cf /etc/sudoers.d/agent-deploy >/dev/null

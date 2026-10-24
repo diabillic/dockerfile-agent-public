@@ -5,6 +5,7 @@
 #   agent-redeploy start    start a run in its own systemd unit (survives the caller going away,
 #                           e.g. when the caller is one of the containers being replaced)
 #   agent-redeploy status   the last run as JSON: started, finished, per-agent results
+#   agent-redeploy list     the containers agent-deploy runs here: name, kind (agent/app), state, priority
 #   agent-redeploy run      the run itself (what `start` launches)
 set -euo pipefail
 STATUS=/var/lib/agent-redeploy/status.json
@@ -21,6 +22,18 @@ case "${1:-}" in
     ;;
   status)
     if [[ -s "$STATUS" ]]; then cat "$STATUS"; else echo '{}'; fi
+    ;;
+  list)
+    docker ps -a --filter label=homelab.priority \
+      --format '{{json .Names}}|{{json (.Label "homelab.kind")}}|{{json .State}}|{{json (.Label "homelab.priority")}}' \
+      | python3 -c '
+import json, sys
+rows = []
+for line in sys.stdin:
+    name, kind, state, prio = (json.loads(x) for x in line.strip().split("|"))
+    if not name.endswith("-prev"):
+        rows.append({"name": name, "kind": kind or "agent", "state": state, "priority": prio})
+print(json.dumps({"containers": rows}))'
     ;;
   run)
     install -d -m 755 /var/lib/agent-redeploy
@@ -48,7 +61,7 @@ save()
 EOF
     ;;
   *)
-    echo "usage: agent-redeploy start|status|run" >&2
+    echo "usage: agent-redeploy start|status|list|run" >&2
     exit 2
     ;;
 esac

@@ -10,6 +10,10 @@
 # `deploy` writes the staging directory, so nothing in it is trusted: the container's run
 # options come from this script and the image's own metadata (USER, VOLUME), never from staged
 # files, apart from the validated values in deploy.env. `deploy` isn't in the docker group.
+# Extra mounts and a network can only come from /etc/agents/<name>.extra, which only root writes
+# (deploy-app.sh does, for apps that need the Docker socket):
+#   mount=/host/path:/container/path[:ro]
+#   network=<docker network>       (created if missing; the container joins it instead of the default bridge)
 set -euo pipefail
 
 NAME=${1:?usage: agent-deploy <name>}
@@ -26,10 +30,12 @@ done
 
 # deploy.env: KEY=VALUE lines, read (never sourced) and validated.
 val() { sed -n "s/^$1=//p" "$STAGE/deploy.env" | tail -1; }
-REVISION=$(val REVISION); PUBLISH=$(val PUBLISH); PRIORITY=$(val PRIORITY)
+REVISION=$(val REVISION); PUBLISH=$(val PUBLISH); PRIORITY=$(val PRIORITY); KIND=$(val KIND)
+KIND=${KIND:-agent}
 [[ "$REVISION" =~ ^[0-9a-f]{7,40}$ ]] || { echo "bad REVISION" >&2; exit 2; }
 [[ -z "$PUBLISH" || "$PUBLISH" =~ ^[0-9]{2,5}:[0-9]{2,5}(,[0-9]{2,5}:[0-9]{2,5})*$ ]] || { echo "bad PUBLISH" >&2; exit 2; }
 [[ "$PRIORITY" =~ ^(high|low)-priority$ ]] || { echo "bad PRIORITY" >&2; exit 2; }
+[[ "$KIND" =~ ^(agent|app)$ ]] || { echo "bad KIND" >&2; exit 2; }
 
 # Settings: root-only on the host, handed to the container at start.
 install -d -m 700 /etc/agents
@@ -43,8 +49,26 @@ docker build -q --pull --build-arg "REVISION=$REVISION" --build-arg "PATCHED_AT=
 user=$(docker image inspect -f '{{.Config.User}}' "$IMAGE")
 mapfile -t vols < <(docker image inspect -f '{{range $k, $v := .Config.Volumes}}{{println $k}}{{end}}' "$IMAGE" | sed '/^$/d')
 args=(--name "$NAME" --restart unless-stopped --env-file "/etc/agents/$NAME.env"
-      --label "homelab.priority=$PRIORITY" --label "homelab.revision=$REVISION"
+      --label "homelab.priority=$PRIORITY" --label "homelab.revision=$REVISION" --label "homelab.kind=$KIND"
       --log-opt max-size=10m --log-opt max-file=3)
+extra=/etc/agents/$NAME.extra
+if [[ -f "$extra" && ! -L "$extra" && "$(stat -c %u "$extra")" == 0 ]]; then
+  while IFS= read -r line; do
+    case "$line" in
+      ""|"#"*) ;;
+      mount=*)
+        m=${line#mount=}
+        [[ "$m" =~ ^/[A-Za-z0-9._/-]+:/[A-Za-z0-9._/-]+(:ro)?$ ]] || { echo "bad mount in $extra" >&2; exit 2; }
+        args+=(-v "$m") ;;
+      network=*)
+        net=${line#network=}
+        [[ "$net" =~ ^[a-z][a-z0-9_-]{1,40}$ ]] || { echo "bad network in $extra" >&2; exit 2; }
+        docker network inspect "$net" >/dev/null 2>&1 || docker network create "$net" >/dev/null
+        args+=(--network "$net") ;;
+      *) echo "unknown line in $extra: $line" >&2; exit 2 ;;
+    esac
+  done < "$extra"
+fi
 for v in "${vols[@]}"; do
   vol="$NAME-data"; [[ ${#vols[@]} -gt 1 ]] && vol="$NAME-$(basename "$v")"
   args+=(-v "$vol:$v")

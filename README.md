@@ -65,7 +65,14 @@ the result. The Proxmox janitor uses these for its weekly rebuild, through a key
 Third-party apps go through the same path: put a Dockerfile in `deploy/apps/<app>/` and run
 `APP=<app> HOST=<docker host> PUBLISH=<host>:<container> deploy/deploy-app.sh`. Base it on the upstream image, add
 an `apt-get full-upgrade` layer keyed on `PATCHED_AT`, and declare the data directory as a `VOLUME`. The app is then
-built fully patched, kept in `<app>-data`, and rebuilt every week. `apps/uptime-kuma` is an example. The LXC deployment below (`deploy/provision.sh`) still works as
+built fully patched, kept in `<app>-data`, and rebuilt every week. `apps/uptime-kuma` is an example.
+
+Apps that need more, such as the Docker socket, get root-only run options through `EXTRA`
+(`mount=/host:/container[:ro]`, `network=<name>`). It's written to `/etc/agents/<app>.extra`, where staged files can't
+reach. `apps/docker-socket-proxy` gives Uptime Kuma a read-only view of a host's containers. On the monitoring
+host, share a private network with it (`EXTRA=network=kuma`). Elsewhere, publish it and limit it with `docker-host.sh`'s
+`PORT_ALLOW=<port>=<monitoring host>`. Every container is labelled `homelab.kind` (`agent` or `app`), and
+`agent-redeploy list` reports them, which is how the Proxmox janitor finds agents to monitor. The LXC deployment below (`deploy/provision.sh`) still works as
 an alternative.
 
 ### LXC deployment (alternative)

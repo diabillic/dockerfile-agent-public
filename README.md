@@ -28,6 +28,16 @@ It follows how the agent is deployed today, so it changes when the deployment do
 | `deploy/lxc/bootstrap-agent.sh` | `apt-get install` packages, minus what only the LXC needs (python3, venv, rsync, sudo, openssh-server) |
 | `requirements.txt` | `pip install` |
 | `<package>/config.py` | `EXPOSE` for every `*_PORT` default, and read-only mounts in the run example for `/etc/...` files |
+| `<package>/health.py` | `HEALTHCHECK` running `python -m <package>.health` every 60 s (unhealthy after 3 failures, 2 min start period) |
+
+**Health checks.** `health.py` is one shared file, kept identical in every agent (this repository's
+`dockerfile_agent/health.py` is the reference copy). Each of an agent's loops calls
+`health.beat(name, within)` every time round, promising to come back within that many seconds, and
+`health.endpoint(name, url)` registers anything it serves (the agent bus's `/health`). The check fails
+when a loop is overdue or an endpoint stops answering 200, so a hung or crashed loop shows up as
+`unhealthy` even while the process is still running, and Uptime Kuma's container monitor goes DOWN.
+`docker inspect --format '{{json .State.Health}}' <agent>` shows the last results. A new agent gets a
+health check by adding the file and its beats.
 
 Code changes reach the image through `COPY <package>/`, so they don't change the Dockerfile.
 Output is deterministic: the same inputs produce the same bytes, so nothing is committed unless

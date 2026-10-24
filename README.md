@@ -28,7 +28,7 @@ It follows how the agent is deployed today, so it changes when the deployment do
 | `deploy/lxc/bootstrap-agent.sh` | `apt-get install` packages, minus what only the LXC needs (python3, venv, rsync, sudo, openssh-server) |
 | `requirements.txt` | `pip install` |
 | `<package>/config.py` | `EXPOSE` for every `*_PORT` default, and read-only mounts in the run example for `/etc/...` files |
-| `<package>/health.py` | `HEALTHCHECK` running `python -m <package>.health` every 60 s (unhealthy after 3 failures, 2 min start period) |
+| `<package>/health.py` | `HEALTHCHECK` running `python -m <package>.health` every 60 s (unhealthy after 5 failures in a row, 2 min start period) |
 
 **Health checks.** `health.py` is one shared file, kept identical in every agent (this repository's
 `dockerfile_agent/health.py` is the reference copy). Each of an agent's loops calls

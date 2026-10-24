@@ -40,6 +40,7 @@ class Facts:
     requirements: bool = False
     ports: list[int] = field(default_factory=list)
     mounts: list[str] = field(default_factory=list)
+    health: bool = False  # <module>/health.py: the image gets a HEALTHCHECK that runs it
     sources: list[str] = field(default_factory=list)
 
 
@@ -83,6 +84,9 @@ def facts(root: Path) -> Facts:
         text = config.read_text(encoding="utf-8")
         f.ports = sorted({int(p) for p in re.findall(r"[\"'][A-Z_]*PORT[\"']\s*,\s*(\d+)", text)})
         f.mounts = sorted({p for p in re.findall(r"[\"'](/etc/[^\"'\s]+)[\"']", text) if p != f.env_file})
+    if (root / module / "health.py").is_file():
+        f.health = True
+        sources.append(f"{module}/health.py")
     f.sources = sources
     return f
 
@@ -143,6 +147,10 @@ def _dockerfile(f: Facts, base_image: str, timezone: str) -> str:
         out += ["VOLUME [" + ", ".join(f'"{d}"' for d in f.state_dirs) + "]"]
     if f.ports:
         out += ["EXPOSE " + " ".join(str(p) for p in f.ports)]
+    if f.health:
+        # Unhealthy after three failed checks in a row; the start period covers startup.
+        out += ["HEALTHCHECK --interval=60s --timeout=15s --start-period=2m --retries=3 \\",
+                f'  CMD ["python", "-m", "{f.module}.health"]']
     out += [f'CMD ["python", "-m", "{f.module}"]', ""]
     return "\n".join(out)
 

@@ -124,6 +124,34 @@ def test_render_follows_the_deployment_files(tmp_path):
     assert "ENV TZ=America/New_York" in est and 'ln -snf "/usr/share/zoneinfo/$TZ" /etc/localtime' in est
 
 
+def test_healthcheck_only_for_agents_with_a_health_module(tmp_path):
+    make_agent_repo(tmp_path)
+    assert "HEALTHCHECK" not in render(facts(tmp_path), BASE)["Dockerfile"]
+    (tmp_path / "demo_agent" / "health.py").write_text("", newline="\n")
+    f = facts(tmp_path)
+    assert f.health and "demo_agent/health.py" in f.sources
+    df = render(f, BASE)["Dockerfile"]
+    assert 'HEALTHCHECK --interval=60s --timeout=15s --start-period=2m --retries=3 \\\n  CMD ["python", "-m", "demo_agent.health"]' in df
+    assert df.index("HEALTHCHECK") < df.index("CMD [\"python\", \"-m\", \"demo_agent\"]")
+
+
+def test_health_fails_when_a_loop_is_overdue_or_an_endpoint_is_down(tmp_path, monkeypatch):
+    from dockerfile_agent import health
+
+    monkeypatch.setenv("HEALTH_DIR", str(tmp_path / "health"))
+    assert health.check()[0] == ["nothing has checked in yet"]
+    health.beat("main", 60)
+    problems, fine = health.check()
+    assert not problems and fine[0].startswith("main ran")
+    health.beat("slow", -5)
+    assert health.check()[0][0].startswith("slow: overdue by 5s")
+    health.reset()
+    health.beat("main", 60)
+    health.endpoint("bus", "http://127.0.0.1:9/health")  # nothing listens on the discard port
+    problems, _ = health.check(timeout=2)
+    assert len(problems) == 1 and problems[0].startswith("bus: ")
+
+
 def test_repo_without_an_agent_unit_is_not_an_agent(tmp_path):
     (tmp_path / "README.md").write_text("hi")
     with pytest.raises(NotAnAgent):

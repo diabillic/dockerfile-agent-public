@@ -8,6 +8,7 @@ import os
 import time
 from pathlib import Path
 
+from . import health
 from .agent import Agent
 from .config import Config
 from .gitops import Git
@@ -16,6 +17,7 @@ from .render import facts, render
 from .state import State
 
 log = logging.getLogger("dockerfile_agent")
+CYCLE_GRACE = 15 * 60  # longest a cycle (fetching, rendering and pushing every repo) should take
 
 
 def main() -> None:
@@ -40,7 +42,9 @@ def main() -> None:
     agent = Agent(cfg, git, State(cfg.state_path), Outbox(cfg.notify_urls))
     log.info("Starting: repos=%s public=%s poll=%ss grace=%smin base=%s tz=%s", ",".join(cfg.repos), cfg.watch_public,
              cfg.poll_seconds, cfg.public_grace_minutes, cfg.base_image, cfg.timezone)
+    health.reset()
     while True:
+        health.beat("repo watch", cfg.poll_seconds + CYCLE_GRACE)
         try:
             agent.cycle()
         except Exception:  # keep watching; the next cycle retries

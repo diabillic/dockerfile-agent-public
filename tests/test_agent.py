@@ -232,7 +232,10 @@ def test_config_requires_private_repos(monkeypatch):
 
 @pytest.mark.parametrize("workflow", [".github/workflows/deploy.yml", ".public/overlay/.github/workflows/deploy.yml"])
 def test_deploy_renders_every_setting_it_is_given(workflow):
-    wf = (pathlib.Path(__file__).resolve().parent.parent / workflow).read_text(encoding="utf-8")
+    path = pathlib.Path(__file__).resolve().parent.parent / workflow
+    if not path.exists():
+        pytest.skip("the public copy has no .public/")
+    wf = path.read_text(encoding="utf-8")
     step = wf.split("- name: Render agent.env", 1)[1].split("- name:", 1)[0]
     env_block, run_block = step.split("run: |", 1)
     given = set(re.findall(r"^\s+([A-Z_]+): \$\{\{ (?:vars|secrets)\.", env_block, re.M))

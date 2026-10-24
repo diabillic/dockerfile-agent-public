@@ -37,6 +37,6 @@ RUN echo "$REVISION" > REVISION
 ENV STATE_PATH=/var/lib/dockerfile-agent/state.json
 USER dockerfile-agent
 VOLUME ["/var/lib/dockerfile-agent"]
-HEALTHCHECK --interval=60s --timeout=15s --start-period=2m --retries=3 \
+HEALTHCHECK --interval=60s --timeout=15s --start-period=2m --retries=5 \
   CMD ["python", "-m", "dockerfile_agent.health"]
 CMD ["python", "-m", "dockerfile_agent"]

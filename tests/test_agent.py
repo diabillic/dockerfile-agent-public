@@ -131,7 +131,7 @@ def test_healthcheck_only_for_agents_with_a_health_module(tmp_path):
     f = facts(tmp_path)
     assert f.health and "demo_agent/health.py" in f.sources
     df = render(f, BASE)["Dockerfile"]
-    assert 'HEALTHCHECK --interval=60s --timeout=15s --start-period=2m --retries=3 \\\n  CMD ["python", "-m", "demo_agent.health"]' in df
+    assert 'HEALTHCHECK --interval=60s --timeout=15s --start-period=2m --retries=5 \\\n  CMD ["python", "-m", "demo_agent.health"]' in df
     assert df.index("HEALTHCHECK") < df.index("CMD [\"python\", \"-m\", \"demo_agent\"]")
 
 

@@ -148,8 +148,8 @@ def _dockerfile(f: Facts, base_image: str, timezone: str) -> str:
     if f.ports:
         out += ["EXPOSE " + " ".join(str(p) for p in f.ports)]
     if f.health:
-        # Unhealthy after three failed checks in a row; the start period covers startup.
-        out += ["HEALTHCHECK --interval=60s --timeout=15s --start-period=2m --retries=3 \\",
+        # Unhealthy after five failed checks in a row; the start period covers startup.
+        out += ["HEALTHCHECK --interval=60s --timeout=15s --start-period=2m --retries=5 \\",
                 f'  CMD ["python", "-m", "{f.module}.health"]']
     out += [f'CMD ["python", "-m", "{f.module}"]', ""]
     return "\n".join(out)

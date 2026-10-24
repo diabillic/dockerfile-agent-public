@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# Installed as /usr/local/sbin/agent-redeploy on a Docker host. Rebuilds every agent from the build
+# context its last deploy staged, through agent-deploy: a fresh base image and apt full-upgrade, so
+# the weekly run leaves every container fully patched without a new commit.
+#   agent-redeploy start    start a run in its own systemd unit (survives the caller going away,
+#                           e.g. when the caller is one of the containers being replaced)
+#   agent-redeploy status   the last run as JSON: started, finished, per-agent results
+#   agent-redeploy run      the run itself (what `start` launches)
+set -euo pipefail
+STATUS=/var/lib/agent-redeploy/status.json
+UNIT=agent-redeploy
+
+case "${1:-}" in
+  start)
+    if systemctl is-active --quiet "$UNIT"; then
+      echo '{"started": false, "running": true}'
+      exit 0
+    fi
+    systemd-run --unit="$UNIT" --collect --quiet /usr/local/sbin/agent-redeploy run
+    echo '{"started": true, "running": true}'
+    ;;
+  status)
+    if [[ -s "$STATUS" ]]; then cat "$STATUS"; else echo '{}'; fi
+    ;;
+  run)
+    install -d -m 755 /var/lib/agent-redeploy
+    python3 - "$STATUS" <<'EOF'
+import json, os, re, subprocess, sys, time
+path = sys.argv[1]
+root = "/home/deploy/staging"
+names = sorted(n for n in os.listdir(root)
+               if re.fullmatch(r"[a-z][a-z0-9-]{1,40}", n) and os.path.isfile(f"{root}/{n}/deploy.env"))
+status = {"started": time.time(), "finished": None, "agents": names, "results": {}}
+
+def save():
+    tmp = path + ".tmp"
+    with open(tmp, "w") as fh:
+        json.dump(status, fh)
+    os.replace(tmp, path)
+
+save()
+for name in names:
+    p = subprocess.run(["/usr/local/sbin/agent-deploy", name], capture_output=True, text=True)
+    status["results"][name] = {"ok": p.returncode == 0, "log": (p.stdout + p.stderr).strip()[-600:]}
+    save()
+status["finished"] = time.time()
+save()
+EOF
+    ;;
+  *)
+    echo "usage: agent-redeploy start|status|run" >&2
+    exit 2
+    ;;
+esac

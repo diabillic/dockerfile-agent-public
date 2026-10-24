@@ -1,0 +1,90 @@
+name: test-and-deploy
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-dockerfile-agent
+  cancel-in-progress: false
+
+jobs:
+  # Tests run on GitHub-hosted runners, so pull requests (including from forks) never touch
+  # your self-hosted runner.
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Unit tests
+        run: |
+          python -m pip install -q -r requirements.txt pytest
+          python -m pytest -q
+
+  # The generated Dockerfile must build.
+  docker-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build the image
+        run: |
+          if [ -f Dockerfile ]; then docker build --pull --build-arg PATCHED_AT="$(date -u +%s)" --build-arg REVISION="$GITHUB_SHA" -t agent:ci .
+          else echo "No Dockerfile yet"; fi
+
+  # Deploys only from main, never for pull requests, and only once AGENT_HOST is configured
+  # (see README: Secrets and variables), so a fresh clone doesn't queue jobs for a missing runner.
+  deploy:
+    needs: test
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && vars.AGENT_HOST != ''
+    # The runner of the agent's environment: PRIORITY=low deploys from the low-priority runners
+    # to the low-priority Docker host, anything else from the high-priority runner.
+    runs-on: ${{ vars.PRIORITY == 'low' && fromJSON('["self-hosted", "low-priority"]') || fromJSON('["self-hosted", "proxmox"]') }}
+    env:
+      AGENT_HOST: ${{ vars.AGENT_HOST }}
+      AGENT_NAME: dockerfile-agent
+      PRIORITY: ${{ vars.PRIORITY }}
+      BUS_HOST_PORT: ${{ vars.BUS_HOST_PORT }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Render agent.env
+        env:
+          REPOS: ${{ vars.REPOS }}
+          BRANCH: ${{ vars.BRANCH }}
+          PUBLIC_SUFFIX: ${{ vars.PUBLIC_SUFFIX }}
+          WATCH_PUBLIC: ${{ vars.WATCH_PUBLIC }}
+          POLL_SECONDS: ${{ vars.POLL_SECONDS }}
+          PUBLIC_GRACE_MINUTES: ${{ vars.PUBLIC_GRACE_MINUTES }}
+          BASE_IMAGE: ${{ vars.BASE_IMAGE }}
+          TIMEZONE: ${{ vars.TIMEZONE }}
+          GIT_AUTHOR_NAME: ${{ vars.GIT_AUTHOR_NAME }}
+          GIT_AUTHOR_EMAIL: ${{ vars.GIT_AUTHOR_EMAIL }}
+          NOTIFY_URLS: ${{ secrets.NOTIFY_URLS }}
+        run: |
+          [ -n "$AGENT_HOST" ] || { echo "::error::repo variable AGENT_HOST is not set"; exit 1; }
+          [ -n "$REPOS" ] || { echo "::error::repo variable REPOS is not set (run deploy/provision.sh)"; exit 1; }
+          [ -f Dockerfile ] || { echo "::error::no Dockerfile yet (dockerfile-agent generates it)"; exit 1; }
+          case "${PRIORITY:-high}" in high|low) ;; *) echo "::error::PRIORITY must be high or low"; exit 1;; esac
+          mkdir -p stage/context
+          cp -r dockerfile_agent requirements.txt Dockerfile .dockerignore stage/context/
+          (umask 077; : > stage/agent.env)
+          for v in REPOS BRANCH PUBLIC_SUFFIX WATCH_PUBLIC POLL_SECONDS PUBLIC_GRACE_MINUTES BASE_IMAGE TIMEZONE \
+                   GIT_AUTHOR_NAME GIT_AUTHOR_EMAIL NOTIFY_URLS; do
+            if [ -n "${!v}" ]; then printf '%s=%s\n' "$v" "${!v}" >> stage/agent.env; fi
+          done
+          publish=""
+          [ -z "$BUS_HOST_PORT" ] || publish="$BUS_HOST_PORT:${AGENT_BUS_PORT:-8765}"
+          printf 'REVISION=%s\nPUBLISH=%s\nPRIORITY=%s-priority\n' "$GITHUB_SHA" "$publish" "${PRIORITY:-high}" > stage/deploy.env
+
+      - name: Ship, build and run
+        run: |
+          rsync -a --delete --exclude '__pycache__' stage/ "deploy@$AGENT_HOST:staging/$AGENT_NAME/"
+          ssh "deploy@$AGENT_HOST" sudo /usr/local/sbin/agent-deploy "$AGENT_NAME"
+
+      - name: Clean up rendered secrets
+        if: always()
+        run: rm -rf stage

@@ -1,0 +1,87 @@
+#!/usr/bin/env bash
+# Installed as /usr/local/sbin/agent-deploy on a Docker host; run by `deploy` via sudo:
+#   sudo agent-deploy <name>
+# Builds /home/deploy/staging/<name>/context into an image and replaces the running container,
+# rolling back to the previous one if the new one doesn't stay up.
+#
+# Every build pulls the newest base image and runs the Dockerfile's apt full-upgrade layer
+# again (PATCHED_AT changes on every deploy), so each deployed image is fully patched.
+#
+# `deploy` writes the staging directory, so nothing in it is trusted: the container's run
+# options come from this script and the image's own metadata (USER, VOLUME), never from staged
+# files, apart from the validated values in deploy.env. `deploy` isn't in the docker group.
+set -euo pipefail
+
+NAME=${1:?usage: agent-deploy <name>}
+[[ "$NAME" =~ ^[a-z][a-z0-9-]{1,40}$ ]] || { echo "bad name" >&2; exit 2; }
+STAGE=/home/deploy/staging/$NAME
+CTX=$STAGE/context
+# No symlinks: they could point root's reads (agent.env goes into the container) at host files.
+[[ "$(realpath -e "$STAGE" 2>/dev/null)" == "$STAGE" ]] || { echo "staging path is missing or a symlink" >&2; exit 2; }
+for f in "$CTX" "$STAGE/agent.env" "$STAGE/deploy.env"; do
+  [[ ! -L "$f" ]] || { echo "$f is a symlink" >&2; exit 2; }
+done
+[[ -f "$CTX/Dockerfile"&& -f "$STAGE/agent.env" && -f "$STAGE/deploy.env" ]] \
+  || { echo "staging is incomplete (need context/Dockerfile, agent.env, deploy.env)" >&2; exit 1; }
+
+# deploy.env: KEY=VALUE lines, read (never sourced) and validated.
+val() { sed -n "s/^$1=//p" "$STAGE/deploy.env" | tail -1; }
+REVISION=$(val REVISION); PUBLISH=$(val PUBLISH); PRIORITY=$(val PRIORITY)
+[[ "$REVISION" =~ ^[0-9a-f]{7,40}$ ]] || { echo "bad REVISION" >&2; exit 2; }
+[[ -z "$PUBLISH" || "$PUBLISH" =~ ^[0-9]{2,5}:[0-9]{2,5}(,[0-9]{2,5}:[0-9]{2,5})*$ ]] || { echo "bad PUBLISH" >&2; exit 2; }
+[[ "$PRIORITY" =~ ^(high|low)-priority$ ]] || { echo "bad PRIORITY" >&2; exit 2; }
+
+# Settings: root-only on the host, handed to the container at start.
+install -d -m 700 /etc/agents
+install -m 600 "$STAGE/agent.env" "/etc/agents/$NAME.env"
+
+IMAGE="agents/$NAME:${REVISION:0:12}"
+echo "==> Building $IMAGE (fresh base image, apt full-upgrade)"
+docker build -q --pull --build-arg "REVISION=$REVISION" --build-arg "PATCHED_AT=$(date -u +%Y%m%dT%H%M%SZ)" \
+  --label "homelab.priority=$PRIORITY" -t "$IMAGE" "$CTX" >/dev/null
+
+user=$(docker image inspect -f '{{.Config.User}}' "$IMAGE")
+mapfile -t vols < <(docker image inspect -f '{{range $k, $v := .Config.Volumes}}{{println $k}}{{end}}' "$IMAGE" | sed '/^$/d')
+args=(--name "$NAME" --restart unless-stopped --env-file "/etc/agents/$NAME.env"
+      --label "homelab.priority=$PRIORITY" --label "homelab.revision=$REVISION"
+      --log-opt max-size=10m --log-opt max-file=3)
+for v in "${vols[@]}"; do
+  vol="$NAME-data"; [[ ${#vols[@]} -gt 1 ]] && vol="$NAME-$(basename "$v")"
+  args+=(-v "$vol:$v")
+  # Data copied in from elsewhere must belong to the image's user.
+  [[ -n "$user" ]] && docker run --rm --user 0 --entrypoint chown -v "$vol:$v" "$IMAGE" -R "$user:" "$v"
+done
+IFS=, read -r -a ports <<<"$PUBLISH"
+for p in "${ports[@]}"; do [[ -n "$p" ]] && args+=(-p "$p"); done
+
+had_prev=0
+if docker container inspect "$NAME" >/dev/null 2>&1; then
+  docker rm -f "$NAME-prev" >/dev/null 2>&1 || true
+  docker stop -t 20 "$NAME" >/dev/null
+  docker rename "$NAME" "$NAME-prev"
+  had_prev=1
+fi
+
+echo "==> Starting $NAME"
+docker run -d "${args[@]}" "$IMAGE" >/dev/null
+sleep 20
+state=$(docker inspect -f '{{.State.Running}} {{.RestartCount}}' "$NAME")
+if [[ "$state" == "true 0" ]]; then
+  [[ $had_prev == 1 ]] && docker rm "$NAME-prev" >/dev/null
+  echo "$NAME running $IMAGE"
+  docker logs --tail 15 "$NAME" 2>&1
+  # Keep the current and previous image of this agent; drop older ones and dangling layers.
+  docker image ls "agents/$NAME" --format '{{.CreatedAt}}\t{{.Repository}}:{{.Tag}}' | sort -r | tail -n +3 \
+    | cut -f2 | xargs -r docker rmi >/dev/null 2>&1 || true
+  docker image prune -f >/dev/null
+  exit 0
+fi
+
+echo "$NAME failed to start; rolling back" >&2
+docker logs --tail 40 "$NAME" >&2 2>&1 || true
+docker rm -f "$NAME" >/dev/null
+if [[ $had_prev == 1 ]]; then
+  docker rename "$NAME-prev" "$NAME"
+  docker start "$NAME" >/dev/null
+fi
+exit 1

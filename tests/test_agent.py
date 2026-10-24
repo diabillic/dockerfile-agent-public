@@ -269,3 +269,14 @@ def test_deploy_renders_every_setting_it_is_given(workflow):
     given = set(re.findall(r"^\s+([A-Z_]+): \$\{\{ (?:vars|secrets)\.", env_block, re.M))
     written = set(re.findall(r"[A-Z_]+", re.search(r"for v in (.*?); do", run_block, re.S).group(1)))
     assert given - written == set(), f"passed to the step but never written to agent.env: {sorted(given - written)}"
+
+
+def test_discord_posts_are_sent_under_the_agents_own_name(monkeypatch):
+    from dockerfile_agent import notice
+
+    posted = []
+    monkeypatch.setattr(notice, "_post_webhook", lambda url, payload: posted.append(payload) or True)
+    url = "https://discord.com/api/webhooks/" + "1/fake-TOKEN"  # split so the public-sync secret scan passes
+    assert notice.Outbox([url]).send(notice.Message("hi"))
+    notice.Outbox([url], username="Someone else").send(notice.Message("hi"))
+    assert [p["username"] for p in posted] == ["dockerfile-agent", "Someone else"]

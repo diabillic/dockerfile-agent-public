@@ -38,6 +38,7 @@ class Config:
     branch: str = "main"
     public_suffix: str = "-public"  # each repo's public copy, watched for direct changes
     watch_public: bool = True
+    private_only: list[str] = field(default_factory=list)  # repos without a public copy: not checked
     poll_seconds: int = 60
     public_grace_minutes: int = 20  # a public copy may lag its private repo while the sync runs
     base_image: str = "python:3.13-slim-trixie"
@@ -63,6 +64,7 @@ class Config:
             branch=os.environ.get("BRANCH", "").strip() or "main",
             public_suffix=os.environ.get("PUBLIC_SUFFIX", "").strip() or "-public",
             watch_public=_bool("WATCH_PUBLIC", True),
+            private_only=_list("PRIVATE_ONLY"),
             poll_seconds=max(15, _int("POLL_SECONDS", 60)),
             public_grace_minutes=max(0, _int("PUBLIC_GRACE_MINUTES", 20)),
             base_image=os.environ.get("BASE_IMAGE", "").strip() or cls.base_image,

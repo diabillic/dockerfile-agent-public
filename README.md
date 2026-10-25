@@ -118,6 +118,7 @@ Actions**; the deploy job stops with a clear error if a required one is missing.
 | variable | `BASE_IMAGE` | optional | Default `python:3.13-slim-trixie` (Python 3.13, as on the Debian 13 LXCs). |
 | variable | `TIMEZONE` | optional | The images' clock (`TZ`, with `tzdata`), an IANA zone such as `America/New_York`. Default `UTC`. Changing it regenerates every Dockerfile. |
 | variable | `POLL_SECONDS`, `PUBLIC_GRACE_MINUTES`, `WATCH_PUBLIC`, `PUBLIC_SUFFIX`, `BRANCH` | optional | Defaults `60`, `20`, `true`, `-public`, `main`. |
+| variable | `PRIVATE_ONLY` | optional | Repositories from `REPOS` that have no public copy, comma separated: their public copy isn't checked. |
 
 ## Operating
 

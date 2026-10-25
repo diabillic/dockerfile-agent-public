@@ -228,6 +228,16 @@ def test_public_copy_checked_for_drift_after_a_grace_period(tmp_path):
     assert "overwritten by the next sync" in out.sent[-1].markdown()
 
 
+def test_private_only_repo_has_no_public_copy_checked(tmp_path):
+    remote_with(tmp_path, "me/demo", make_agent_repo)  # and no me/demo-public at all
+    agent, out = make_agent(tmp_path)
+    agent.cfg.private_only = ["me/demo"]
+    for _ in range(ERROR_AFTER + 1):
+        agent.cycle()
+    assert agent.state["errors"] == {} and agent.state["public"] == {}
+    assert show(tmp_path / "remotes" / "me" / "demo.git", "Dockerfile")  # the private repo still gets one
+
+
 def test_errors_are_reported_once_after_repeated_failures_then_recovery(tmp_path):
     agent, out = make_agent(tmp_path, repos=("me/missing",))
     agent.cfg.watch_public = False

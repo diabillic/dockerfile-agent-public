@@ -2,10 +2,15 @@
 # listing and inspection only (GET /containers/...), no changes (POST=0). Deployed with
 # deploy/deploy-app.sh with EXTRA="mount=/var/run/docker.sock:/var/run/docker.sock:ro" (plus a
 # network or a firewalled PUBLISH), and rebuilt weekly like everything else. Inspection includes
-# containers' environment, so keep its reach to the monitoring host only.
+# containers' environment, so keep its reach to the monitoring host only: ALLOW_FROM (addresses or
+# CIDRs, space-separated) makes the proxy itself refuse every other client, for hosts without a
+# firewall of their own.
 FROM tecnativa/docker-socket-proxy:latest
 
 ARG PATCHED_AT=unknown
 ARG REVISION=unknown
-ENV CONTAINERS=1 POST=0 TZ=America/New_York
-RUN echo "Patching the base OS ($PATCHED_AT)" && apk upgrade --no-cache && apk add --no-cache tzdata
+ENV CONTAINERS=1 POST=0 TZ=America/New_York ALLOW_FROM="0.0.0.0/0 ::/0"
+RUN echo "Patching the base OS ($PATCHED_AT)" && apk upgrade --no-cache && apk add --no-cache tzdata \
+ && sed -i 's|^\(    bind \${BIND_CONFIG}\)$|\1\n    http-request deny deny_status 403 unless { src "${ALLOW_FROM[*]}" }|' \
+      /usr/local/etc/haproxy/haproxy.cfg.template \
+ && grep -q 'unless { src "${ALLOW_FROM\[\*\]}" }' /usr/local/etc/haproxy/haproxy.cfg.template

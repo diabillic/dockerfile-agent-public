@@ -50,7 +50,7 @@ class Agent:
     def cycle(self) -> None:
         for repo in self.cfg.repos:
             self._guard(repo, self.update_private, repo)
-            if self.cfg.watch_public:
+            if self.cfg.watch_public and repo not in self.cfg.private_only:
                 self._guard(self.cfg.public(repo), self.check_public, repo)
         self._public_alerts()
         self.state.save()

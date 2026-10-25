@@ -74,14 +74,15 @@ if [[ -n "${DOCKER_API_ALLOW:-}" || -n "${PORT_ALLOW:-}" ]]; then
     fi
     if [[ -n "${PORT_ALLOW:-}" ]]; then
       # Published ports are DNATed to the container, so they're filtered on the forward path by
-      # their original destination port. Only new connections: replies come from the container.
+      # their original destination port. Only new, DNATed connections: replies come from the
+      # container, and a container's own outgoing connections to that port elsewhere aren't DNATed.
       echo "  chain forward {"
       echo "    type filter hook forward priority -10; policy accept;"
       IFS=';' read -r -a entries <<<"$PORT_ALLOW"
       for e in "${entries[@]}"; do
         port=${e%%=*}; from=${e#*=}
-        echo "    ct state new meta l4proto tcp ct original proto-dst $port ip saddr { ${from//,/, } } accept"
-        echo "    ct state new meta l4proto tcp ct original proto-dst $port drop"
+        echo "    ct state new ct status dnat meta l4proto tcp ct original proto-dst $port ip saddr { ${from//,/, } } accept"
+        echo "    ct state new ct status dnat meta l4proto tcp ct original proto-dst $port drop"
       done
       echo "  }"
     fi

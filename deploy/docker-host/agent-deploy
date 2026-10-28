@@ -10,10 +10,11 @@
 # `deploy` writes the staging directory, so nothing in it is trusted: the container's run
 # options come from this script and the image's own metadata (USER, VOLUME), never from staged
 # files, apart from the validated values in deploy.env. `deploy` isn't in the docker group.
-# Extra mounts and a network can only come from /etc/agents/<name>.extra, which only root writes
-# (deploy-app.sh does, for apps that need the Docker socket):
+# Extra mounts, a network and host entries can only come from /etc/agents/<name>.extra, which only
+# root writes (deploy-app.sh does, for apps that need the Docker socket):
 #   mount=/host/path:/container/path[:ro]
 #   network=<docker network>       (created if missing; the container joins it instead of the default bridge)
+#   host=<name>:<IPv4 address>     (an /etc/hosts entry, e.g. to reach a device by the name on its certificate)
 set -euo pipefail
 
 NAME=${1:?usage: agent-deploy <name>}
@@ -65,6 +66,10 @@ if [[ -f "$extra" && ! -L "$extra" && "$(stat -c %u "$extra")" == 0 ]]; then
         [[ "$net" =~ ^[a-z][a-z0-9_-]{1,40}$ ]] || { echo "bad network in $extra" >&2; exit 2; }
         docker network inspect "$net" >/dev/null 2>&1 || docker network create "$net" >/dev/null
         args+=(--network "$net") ;;
+      host=*)
+        h=${line#host=}
+        [[ "$h" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?:([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || { echo "bad host in $extra" >&2; exit 2; }
+        args+=(--add-host "$h") ;;
       *) echo "unknown line in $extra: $line" >&2; exit 2 ;;
     esac
   done < "$extra"

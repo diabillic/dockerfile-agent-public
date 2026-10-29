@@ -22,7 +22,19 @@ tmux new-session -d -s rc -x 160 -y 48 "while true; do
   echo 'remote-control exited; restarting in 30 s'; sleep 30
 done"
 echo "Remote Control running in tmux session rc (docker exec -it <container> tmux attach -t rc)"
+
+# docker stop signals only this script: stop the server with Ctrl-C, as a person would, so it signs
+# off at claude.ai instead of being killed and leaving a stale environment there
+stop() {
+  tmux send-keys -t rc C-c 2>/dev/null
+  for _ in $(seq 15); do pgrep -x claude >/dev/null || break; sleep 1; done
+  tmux capture-pane -p -t rc 2>/dev/null | sed '/^\s*$/d' | tail -3
+  tmux kill-server 2>/dev/null
+  exit 0
+}
+trap stop TERM INT
+
 # Docker restarts the container if the tmux session ever goes away
-while tmux has-session -t rc 2>/dev/null; do sleep 30; done
+while tmux has-session -t rc 2>/dev/null; do sleep 30 & wait $!; done
 echo "tmux session rc ended" >&2
 exit 1

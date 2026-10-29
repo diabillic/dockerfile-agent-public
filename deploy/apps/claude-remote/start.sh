@@ -2,7 +2,7 @@
 # Keeps `claude remote-control` running in the tmux session "rc". Before the claude.ai login it
 # exits and is retried every 30 s, so the container stays up for `claude auth login`.
 set -u
-mkdir -p "$HOME/workspace" && cd "$HOME/workspace" || exit 1
+mkdir -p "$HOME/homelab" && cd "$HOME/homelab" || exit 1
 
 # The mounted MCP servers replace same-named ones in ~/.claude.json (user scope); others are kept
 servers=/etc/claude-remote/mcp.json
